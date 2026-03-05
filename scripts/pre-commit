@@ -1,0 +1,45 @@
+#!/bin/sh
+#
+# Pre-commit hook: auto-unstage junk files and block large files.
+# Install: cp scripts/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+#
+
+# --- Auto-unstage junk files ---
+JUNK_PATTERNS=".DS_Store Thumbs.db *.log .env* node_modules/ .next/ .cache/"
+
+for pattern in $JUNK_PATTERNS; do
+  # Find staged files matching the pattern
+  matches=$(git diff --cached --name-only --diff-filter=ACM | grep -E "(^|/)${pattern}$" 2>/dev/null || true)
+  if [ -n "$matches" ]; then
+    echo "Pre-commit: auto-unstaging junk files matching '$pattern':"
+    echo "$matches" | while IFS= read -r file; do
+      echo "  - $file"
+      git reset HEAD -- "$file" >/dev/null 2>&1
+    done
+  fi
+done
+
+# --- Warn if package.json changed without package-lock.json ---
+PKG_CHANGED=$(git diff --cached --name-only --diff-filter=ACM | grep -c "^dashboard/package\.json$" || true)
+LOCK_CHANGED=$(git diff --cached --name-only --diff-filter=ACM | grep -c "^dashboard/package-lock\.json$" || true)
+if [ "$PKG_CHANGED" -gt 0 ] && [ "$LOCK_CHANGED" -eq 0 ]; then
+  echo "Pre-commit: WARNING — dashboard/package.json was modified but package-lock.json was not."
+  echo "  Run 'cd dashboard && npm install' to update the lock file and node_modules."
+fi
+
+# --- Block files larger than 1 MB ---
+MAX_SIZE=1048576  # 1 MB in bytes
+
+git diff --cached --name-only --diff-filter=ACM | while IFS= read -r file; do
+  if [ -f "$file" ]; then
+    size=$(wc -c < "$file" | tr -d ' ')
+    if [ "$size" -gt "$MAX_SIZE" ]; then
+      echo "Pre-commit: BLOCKED — '$file' is $(( size / 1024 )) KB (limit: 1 MB)"
+      echo "Remove it from staging with: git reset HEAD -- $file"
+      exit 1
+    fi
+  fi
+done
+
+# Exit with the status of the last pipeline (the large-file check)
+exit $?
