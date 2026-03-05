@@ -15,14 +15,15 @@ twitter-archive-explore/
 │   ├── twitter-2023-12/
 │   ├── twitter-2024-11/
 │   └── twitter-2026-02/
-├── dashboard/                  # Next.js web dashboard
+├── dashboard/                  # Next.js 16 web dashboard
 ├── asset/                      # Generated/data files (gitignored contents)
 │   ├── url-cache.json          # t.co URL expansion cache
 │   ├── word-cloud.json         # Precomputed top-500 word frequencies
 │   ├── IGNOREDWORDS.md         # Built-in stop words + user-dismissed words
 │   └── CONSOLIDATED.md         # Stateful record of all liked tweets (append-only)
-├── scripts/                    # Git hooks and utility scripts
-│   └── pre-commit              # Tracked copy of the pre-commit hook
+├── images/                     # Screenshots for README
+├── scripts/                    # Git hooks
+│   └── pre-commit              # Auto-unstage junk, warn on lock drift, block large files
 └── INSTRUCTIONS.md             # This file
 ```
 
@@ -69,6 +70,7 @@ npm run expand-urls
 ```
 
 What it does:
+
 - Scans every `like.js` file across all 10 archives for `t.co` URLs
 - Fetches each unique URL (5 at a time, 200 ms delay between requests, follows redirects, 10 s timeout)
 - Retries failed requests up to 3 times with exponential backoff (1 s, 2 s, 4 s); respects HTTP 429 `Retry-After` headers
@@ -90,7 +92,9 @@ npm run dev
 
 Then open **http://localhost:3000** in your browser.
 
-The server reads archive data directly from `../zip/` — no database or environment variable setup required. Archives are detected automatically from the `zip/` directory.
+A **preflight check** runs automatically before the dev server starts. It validates that dependencies are installed and up to date, checks for Next.js version mismatches, and verifies build-cache integrity. If issues are found, it auto-fixes them (runs `npm install` or deletes a stale `.next/` directory). You can also run preflight manually: `npm run preflight`.
+
+Archives are detected automatically from `zip/` — no database or environment variable setup required.
 
 To stop the server: press `Ctrl+C` in the terminal.
 
@@ -98,7 +102,7 @@ To stop the server: press `Ctrl+C` in the terminal.
 
 ## Step 5 — (Optional) Generate CONSOLIDATED.md
 
-This produces a single flat Markdown file of all 5,189 unique liked tweets, sorted newest-first, with a `Read: No` field you can manually flip to `Yes` to track what you have read.
+This produces a single flat Markdown file of all unique liked tweets, sorted newest-first, with read-state and bookmark fields for tracking.
 
 ```bash
 cd dashboard
@@ -113,15 +117,15 @@ Each entry looks like:
 ## 1. [Tweet 1856551798573597051](https://twitter.com/i/web/status/1856551798573597051)
 
 - **Date**: 2024-11-13
-- **Read**: No
+- **Read**: Unread
 - **Bookmark**: No
 - **URL**: https://example.com/article
 - **Tweet**: Full text of the liked tweet...
 ```
 
-To mark a tweet as read, open `asset/CONSOLIDATED.md` in any text editor and change `**Read**: No` to `**Read**: Yes`.
+Read states cycle through: **Unread → Read → In-Progress → Ignore**. You can edit these manually in the file or use the dashboard UI.
 
-**Safe to re-run:** `generate-consolidated` is append-only. It only adds entries for new tweetIds not already in the file. All existing entries — including your manual `Read: Yes` edits — are preserved verbatim.
+**Safe to re-run:** `generate-consolidated` is append-only. It only adds entries for new tweetIds not already in the file. All existing entries — including your manual edits — are preserved verbatim.
 
 ---
 
@@ -135,6 +139,7 @@ npm run generate-word-cloud
 ```
 
 Output files:
+
 - `asset/word-cloud.json` — word frequencies used by the dashboard
 - `asset/IGNOREDWORDS.md` — lists built-in stop words and any user-dismissed words
 
@@ -146,19 +151,29 @@ When you dismiss a word from the cloud in the UI (click the X), it is removed fr
 
 ## Dashboard routes
 
-| URL | What it shows |
-|-----|---------------|
-| `http://localhost:3000` | Redirects to `/archive/all` |
-| `/archive/all` | All 10 archives merged, globally deduplicated (5,189 tweets) |
-| `/archive/all/export` | Download `all-archives-likes.md` |
-| `/archive/twitter-2024-11` | Single archive view |
-| `/archive/twitter-2024-11/export` | Download that archive's `.md` file |
-| `POST /api/read-state` | Patch read states in CONSOLIDATED.md (`{ changes: { tweetId: ReadState } }`) |
-| `POST /api/bookmark` | Patch bookmark states in CONSOLIDATED.md (`{ changes: { tweetId: bool } }`) |
-| `GET /api/word-cloud` | Fetch word cloud data (auto-regenerates if stale) |
-| `POST /api/word-cloud` | Dismiss a word from the cloud (`{ word: string }`) |
+### Pages
 
-Replace `twitter-2024-11` with any of the archive names listed in the project structure above.
+| URL                           | What it shows                                 |
+| ----------------------------- | --------------------------------------------- |
+| `http://localhost:3000`       | Redirects to `/archive/all`                   |
+| `/archive/all`                | All 10 archives merged, globally deduplicated |
+| `/archive/all?tab=statistics` | Statistics view (read/unread bar graphs)      |
+| `/archive/all?tab=insights`   | Word cloud and click-to-filter                |
+| `/archive/all?tab=bookmarks`  | Bookmarked tweets only                        |
+| `/archive/all/export`         | Download `all-archives-likes.md`              |
+| `/archive/{name}`             | Single archive view (same tabs available)     |
+| `/archive/{name}/export`      | Download that archive's `.md` file            |
+
+### API endpoints
+
+| Endpoint          | Method | Description                                                                    |
+| ----------------- | ------ | ------------------------------------------------------------------------------ |
+| `/api/read-state` | POST   | Patch read states in CONSOLIDATED.md (`{ changes: { tweetId: ReadState } }`)   |
+| `/api/bookmark`   | POST   | Patch bookmark states in CONSOLIDATED.md (`{ changes: { tweetId: boolean } }`) |
+| `/api/word-cloud` | GET    | Fetch word cloud data (auto-regenerates if stale)                              |
+| `/api/word-cloud` | POST   | Dismiss a word from the cloud (`{ word: string }`)                             |
+
+Replace `{name}` with any archive name listed in the project structure above.
 
 ---
 
@@ -168,13 +183,14 @@ Replace `twitter-2024-11` with any of the archive names listed in the project st
 - **Search** — full-text search across tweet bodies, filters results in real time
 - **Pagination** — 50 tweets per page with Prev / Next controls
 - **Export to Markdown** — button on each page downloads a `.md` file of all tweets in the current view
-- **Year dividers** — bold dark-red headings appear at each year boundary in the tweet list, giving a clear sense of chronological grouping
-- **Year navigation** — on wide screens (xl breakpoint, >= 1280px), a sticky side panel on the left (vertically centered) lists all years at h2 size; clicking a year jumps to the correct page and scrolls to that heading
-- **Sort toggle** — "↑ From Oldest" / "↓ From Newest" button with directional arrows indicates current sort order
-- **Read toggle** — click the read/unread dot on any tweet to toggle its state; pending changes are batched and saved with the "Save changes (N)" button that appears in the controls row
-- **Bookmark** — click the star icon on any tweet card to bookmark it; bookmarked tweets show a filled yellow star; bookmark changes are batched alongside read-state changes and saved via the same "Save changes (N)" button; bookmark state is persisted as `**Bookmark**: Yes/No` in `CONSOLIDATED.md` via `POST /api/bookmark`
-- **Statistics tab** — "Statistics" button next to the archive dropdown shows read/unread bar graphs: an overall progress bar and a per-year breakdown; click again to return to the tweet list
-- **Insights tab** — "Insights" button shows a word cloud of most frequent words across all tweet text; click a word to see matching tweets sorted newest-first with pagination; dismiss words with the X button (persisted to `IGNOREDWORDS.md`, auto-regenerated on next page load)
+- **Year dividers** — bold dark-red headings appear at each year boundary in the tweet list
+- **Year navigation** — on wide screens (>= 1280px), a sticky side panel lists all years; clicking a year jumps to the correct page and scrolls to that heading
+- **Sort toggle** — "↑ From Oldest" / "↓ From Newest" button with directional arrows
+- **4-state read tracking** — click the dot on any tweet to cycle through Unread (gray) → Read (green) → In-Progress (blue) → Ignore (black); pending changes are batched and saved with the "Save changes (N)" button
+- **Bookmarks** — click the star icon on any tweet to bookmark it (filled yellow star); bookmark changes are batched alongside read-state changes and saved via the same "Save changes (N)" button
+- **Bookmarks tab** — dedicated tab (`?tab=bookmarks`) showing only bookmarked tweets with search, sort, pagination, and year navigation
+- **Statistics tab** — read/unread bar graphs: overall progress and per-year breakdown
+- **Insights tab** — word cloud of most frequent words; click a word to see matching tweets; dismiss words with the X button (persisted, auto-regenerated on next page load)
 
 ---
 
@@ -203,15 +219,17 @@ npm run start   # serve the built output on http://localhost:3000
 
 ## Quick reference
 
-| Command | What it does |
-|---------|--------------|
-| `npm install` | Install dependencies (first time only) |
-| `npm run dev` | Start dev server at http://localhost:3000 |
-| `npm run expand-urls` | Build / update the t.co URL expansion cache |
-| `npm run generate-consolidated` | Create or append to `asset/CONSOLIDATED.md` |
-| `npm run generate-word-cloud` | Generate or refresh word cloud frequencies |
-| `npm test` | Run unit tests (Vitest) |
-| `npm run build` | Production build |
-| `npm run start` | Serve production build |
+All commands run from inside `dashboard/`:
 
-All commands must be run from inside the `dashboard/` directory.
+| Command                         | What it does                                    |
+| ------------------------------- | ----------------------------------------------- |
+| `npm install`                   | Install dependencies (first time only)          |
+| `npm run dev`                   | Start dev server (runs preflight automatically) |
+| `npm run preflight`             | Run dependency & build-cache checks manually    |
+| `npm run expand-urls`           | Build / update the t.co URL expansion cache     |
+| `npm run generate-consolidated` | Create or append to `asset/CONSOLIDATED.md`     |
+| `npm run generate-word-cloud`   | Generate or refresh word cloud frequencies      |
+| `npm test`                      | Run unit tests (Vitest)                         |
+| `npm run test:watch`            | Run tests in watch mode                         |
+| `npm run build`                 | Production build                                |
+| `npm run start`                 | Serve production build                          |
